@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Check, CheckCircle2, Clock3, CreditCard, ArrowRight } from 'lucide-react';
-import { checkoutPreview } from '../../stores/preview';
+import { checkoutPreview, usePreview, walletPreview } from '../../stores/preview';
 import { useAction, useCart, useOrder } from '../../hooks/preview';
 import { Amount, Badge, Confirm, ErrorState, Loading } from '../../components/ui/common';
 import { ProductArt } from '../../components/ui/ProductArt';
@@ -13,7 +13,10 @@ export function CheckoutPage({ success = false }: { success?: boolean }) {
   const { data: cart } = useCart();
   const { data: order, error, refetch } = useOrder(cart.currentOrderId);
   const [confirm, setConfirm] = useState(false);
+  const [confirmPayment, setConfirmPayment] = useState(false);
+  const walletBalance = usePreview((s) => s.user ? s.customers[s.user.username]?.walletBalance ?? 0 : 0);
   const navigate = useNavigate();
+  const pay = useAction(walletPreview.pay, () => navigate('/success'));
   const cancel = useAction(checkoutPreview.cancel, () => navigate('/cart'));
   const next = useAction(checkoutPreview.continue, () => navigate('/products'));
   if (error) return <ErrorState error={error} retry={() => void refetch()}/>;
@@ -38,6 +41,13 @@ export function CheckoutPage({ success = false }: { success?: boolean }) {
           <Badge status={order.status}/>
         </div>
         <OrderSummary order={order} prefix={success ? 'success' : 'checkout'}/>
+        {order.paymentMethod && <p className="account-note">Paid using {order.paymentMethod === 'wallet' ? 'demo wallet' : 'simulated gateway'}.</p>}
+        {!success && order.status === 'pending' && <section className="wallet-payment" aria-labelledby="wallet-payment-title">
+          <h3 id="wallet-payment-title">Pay with demo wallet</h3>
+          <div className="summary-row"><span>Available balance</span><Amount value={walletBalance} testId="checkout-wallet-balance"/></div>
+          <p>Simulated funds only. No real payment is processed.</p>
+          {walletBalance < order.total ? <><p>Top up <Amount value={order.total - walletBalance}/> to complete payment.</p><Link className="btn" to="/account">Top up demo wallet</Link></> : <button className="btn primary" data-testid="wallet-pay-button" disabled={pay.isPending} onClick={() => setConfirmPayment(true)}>Pay <Amount value={order.total}/> with wallet</button>}
+        </section>}
         {!success && (
           <div className="payment-state"><CreditCard size={21}/><div>
             <strong>{order.paymentFailed ? 'Payment failed' : 'Awaiting payment'}</strong>
@@ -51,6 +61,7 @@ export function CheckoutPage({ success = false }: { success?: boolean }) {
       </section>
       {!success && import.meta.env.DEV && <GatewayPreview orderId={order.orderId}/>}
       {confirm && <Confirm title="Cancel checkout?" pending={cancel.isPending} onClose={() => setConfirm(false)} onConfirm={() => { setConfirm(false); cancel.mutate(undefined); }}>The preview reservation will be released. Your items will stay in your cart.</Confirm>}
+      {confirmPayment && <Confirm title="Pay with demo wallet?" pending={pay.isPending} onClose={() => setConfirmPayment(false)} onConfirm={() => pay.mutate(order.orderId)}>Deduct {order.total.toLocaleString()} THB in simulated funds for {order.orderId}. Your remaining balance will be {(walletBalance - order.total).toLocaleString()} THB.</Confirm>}
     </main>
   );
 }

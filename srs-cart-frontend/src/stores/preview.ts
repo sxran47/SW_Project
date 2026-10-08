@@ -4,9 +4,12 @@ import { previewCoupons, previewProducts, previewUsers } from '../data/preview';
 import { PreviewError } from '../data/errors';
 import { MAX_ORDER_WEIGHT_GRAM, totalWeightGram } from '../data/weight';
 import { useUI } from './ui';
-import type { Cart, CheckoutRequest, Coupon, Order, Product, ProductUpdateRequest, QuantityRequest, SaleStatus, Stage, User } from '../types/ui';
+import type { Cart, CheckoutRequest, Coupon, MemberTier, Order, Product, ProductUpdateRequest, QuantityRequest, SaleStatus, Stage, User, WalletTransaction } from '../types/ui';
 
 interface CustomerPreview {
+  memberTier: MemberTier;
+  walletBalance: number;
+  transactions: WalletTransaction[];
   stage: Stage;
   items: Record<string, number>;
   couponCode: string | null;
@@ -30,6 +33,7 @@ function initialData() {
     products: structuredClone(previewProducts),
     coupons: structuredClone(previewCoupons),
     customers: Object.fromEntries(previewUsers.filter((u) => u.role === 'Customer').map((u) => [u.username, {
+      memberTier: u.memberTier ?? 'normal', walletBalance: 0, transactions: [],
       stage: 'cart' as Stage, items: {}, couponCode: null, currentOrderId: null,
     }])),
     orders: [] as Order[],
@@ -45,9 +49,9 @@ export const usePreview = create<PreviewState>()(persist((set) => ({
     const user: User = previewUsers.find((candidate) => candidate.username === username)
       ?? { username, role: 'Customer', memberTier: 'normal' };
     set((state) => ({
-      user: { ...user },
+      user: { ...user, ...(user.role === 'Customer' ? { memberTier: state.customers[username]?.memberTier ?? user.memberTier } : {}) },
       customers: user.role === 'Customer' && !Object.hasOwn(state.customers, username)
-        ? { ...state.customers, [username]: { stage: 'cart', items: {}, couponCode: null, currentOrderId: null } }
+        ? { ...state.customers, [username]: { memberTier: user.memberTier ?? 'normal', walletBalance: 0, transactions: [], stage: 'cart', items: {}, couponCode: null, currentOrderId: null } }
         : state.customers,
     }));
   },
@@ -57,7 +61,14 @@ export const usePreview = create<PreviewState>()(persist((set) => ({
   merge: (persisted, current) => {
     const saved = persisted as Partial<PreviewState>;
     const coupons = saved.coupons ?? current.coupons;
-    return { ...current, ...saved, coupons: [
+    const customers = Object.fromEntries(Object.entries({ ...current.customers, ...saved.customers }).map(([username, customer]) => [username, {
+      ...customer,
+      memberTier: customer.memberTier ?? previewUsers.find((u) => u.username === username)?.memberTier ?? 'normal',
+      walletBalance: customer.walletBalance ?? 0,
+      transactions: customer.transactions ?? [],
+    }]));
+    const user = saved.user?.role === 'Customer' ? { ...saved.user, memberTier: customers[saved.user.username]?.memberTier ?? 'normal' } : saved.user ?? null;
+    return { ...current, ...saved, user, customers, coupons: [
       ...coupons,
       ...previewCoupons.filter((seed) => !coupons.some((coupon) => coupon.code === seed.code)),
     ] };
@@ -88,6 +99,38 @@ export function viewPreviewCart(state: PreviewState): Cart {
     couponCode: customer?.couponCode ?? null, currentOrderId: customer?.currentOrderId ?? null,
     checkoutAllowed: stage === 'cart' && lines.length > 0 };
 }
+
+export const walletPreview = {
+  topUp: async (amount: number) => {
+    const user = requireUser('Customer');
+    if (!Number.isInteger(amount) || amount < 1 || amount > 50000) {
+      throw new PreviewError('VALIDATION_ERROR', 'Enter a whole-number top-up from 1 to 50,000 THB.', ['amount']);
+    }
+    const state = usePreview.getState();
+    const customer = state.customers[user.username];
+    const balance = customer.walletBalance + amount;
+    if (balance > 100000) throw new PreviewError('WALLET_LIMIT_EXCEEDED', 'The demo wallet can hold at most 100,000 THB.');
+    const transaction: WalletTransaction = { id: crypto.randomUUID(), kind: 'topup', amount, balanceAfter: balance, createdAt: new Date().toISOString() };
+    usePreview.setState({ customers: { ...state.customers, [user.username]: { ...customer, walletBalance: balance, transactions: [...customer.transactions, transaction] } } });
+    return transaction;
+  },
+  pay: async (orderId: string) => {
+    const user = requireUser('Customer');
+    requireStage(user, 'payment');
+    const state = usePreview.getState();
+    const customer = state.customers[user.username];
+    const order = state.orders.find((o) => o.orderId === orderId && o.owner === user.username);
+    if (!order) throw new PreviewError('ORDER_NOT_FOUND', 'Order not found.');
+    if (order.status !== 'pending' || customer.currentOrderId !== orderId) throw new PreviewError('OPERATION_NOT_ALLOWED', 'This order is not awaiting payment.');
+    if (customer.walletBalance < order.total) throw new PreviewError('WALLET_INSUFFICIENT_FUNDS', 'Your wallet balance is too low. Top up before paying.');
+    const balance = customer.walletBalance - order.total;
+    const transaction: WalletTransaction = { id: crypto.randomUUID(), kind: 'payment', amount: -order.total, balanceAfter: balance, createdAt: new Date().toISOString(), orderId };
+    const paid: Order = { ...order, status: 'paid', paymentFailed: false, paymentMethod: 'wallet' };
+    usePreview.setState({ orders: state.orders.map((o) => o.orderId === orderId ? paid : o),
+      customers: { ...state.customers, [user.username]: { ...customer, walletBalance: balance, transactions: [...customer.transactions, transaction], stage: 'success', items: {}, couponCode: null } } });
+    return paid;
+  },
+};
 
 function changeQuantity({ productId, quantity }: QuantityRequest, operation: 'add' | 'update') {
   const user = requireUser('Customer');
@@ -198,13 +241,22 @@ export async function previewGateway(orderId: string, result: 'success' | 'fail'
     usePreview.setState({ orders: state.orders.map((o) => o.orderId === orderId ? { ...o, paymentFailed: true } : o) });
     useUI.getState().notify({ kind: 'info', code: '', message: 'การชำระเงินล้มเหลว กรุณาลองใหม่' });
   } else {
-    usePreview.setState({ orders: state.orders.map((o) => o.orderId === orderId ? { ...o, status: 'paid', paymentFailed: false } : o),
+    usePreview.setState({ orders: state.orders.map((o) => o.orderId === orderId ? { ...o, status: 'paid', paymentFailed: false, paymentMethod: 'gateway' } : o),
       customers: { ...state.customers, [order.owner]: { ...customer, stage: 'success', items: {}, couponCode: null } } });
     useUI.getState().notify(null);
   }
 }
 
 export const adminPreview = {
+  setMemberTier: async (username: string, memberTier: MemberTier) => {
+    requireUser('Admin');
+    const state = usePreview.getState();
+    const customer = state.customers[username];
+    if (!customer) throw new PreviewError('USER_NOT_FOUND', 'Customer not found.');
+    if (!['normal', 'prime'].includes(memberTier)) throw new PreviewError('VALIDATION_ERROR', 'Select Normal or Prime membership.');
+    usePreview.setState({ customers: { ...state.customers, [username]: { ...customer, memberTier } } });
+    return memberTier;
+  },
   update: async (id: string, values: ProductUpdateRequest) => {
     requireUser('Admin');
     const state = usePreview.getState();

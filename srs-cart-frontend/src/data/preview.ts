@@ -14,6 +14,7 @@ export const previewCoupons: Coupon[] = [
 export const previewUsers: User[] = [
   { username: 'cus_normal', role: 'Customer', memberTier: 'normal' },
   { username: 'cus_prime', role: 'Customer', memberTier: 'prime' },
+  { username: 'prime', role: 'Customer', memberTier: 'prime' },
   { username: 'admin01', role: 'Admin' },
 ];
 
