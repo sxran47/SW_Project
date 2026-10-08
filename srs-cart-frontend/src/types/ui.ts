@@ -13,7 +13,7 @@ export interface CouponRequest { code: string }
 export interface Coupon { code: string; percent: number; minSpend: number; status: SaleStatus }
 export interface CheckoutRequest { zone: Zone; speed: Speed }
 export interface OrderLine { productId: string; name: string; price: number; quantity: number; lineTotal: number }
-export interface Order { orderId: string; createdAt: string; status: OrderStatus; lines: OrderLine[]; subtotal: number; discount: number; shipping: number; total: number; zone: Zone; speed: Speed; couponCode: string | null; paymentFailed: boolean }
+export interface Order { orderId: string; owner: string; createdAt: string; status: OrderStatus; lines: OrderLine[]; subtotal: number; discount: number; shipping: number; total: number; zone: Zone; speed: Speed; couponCode: string | null; paymentFailed: boolean }
 export interface ProductUpdateRequest { price?: number; stock?: number }
 export interface StatusRequest { status: SaleStatus }
 export interface UIMessage { kind: 'error' | 'notice' | 'info'; code: string; message: string; fields?: string[]; productIds?: string[] }
