@@ -1,0 +1,4 @@
+import { test, expect } from '../fixtures';
+test('FR-0.1 customer login and accessible validation', async ({ page, login }) => { await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await expect(page.getByText('Enter your username.', { exact: true })).toBeVisible(); await login.login(); await expect(page.getByTestId('page-products')).toBeVisible(); await expect(page.getByTestId('nav-admin-products')).toHaveCount(0); });
+test('FR-0.1.2 invalid credentials', async ({ page }) => { await page.getByLabel('Username', { exact: true }).fill('cus_normal'); await page.getByLabel('Password', { exact: true }).fill('incorrect'); await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await expect(page.getByRole('alert')).toHaveAttribute('data-code', 'AUTH_INVALID_CREDENTIALS'); });
+test('protected URL requires login', async ({ page }) => { await page.goto('/admin/products'); await expect(page.getByTestId('page-login')).toBeVisible(); });
